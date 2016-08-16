@@ -1,42 +1,30 @@
-/*  OctoWS2811 BasicTest.ino - Basic RGB LED Test
-    http://www.pjrc.com/teensy/td_libs_OctoWS2811.html
-  Required Connections
-  --------------------
-    pin 2:  LED Strip #1    OctoWS2811 drives 8 LED Strips.
-    pin 14: LED strip #2    All 8 are the same length.
-    pin 7:  LED strip #3
-    pin 8:  LED strip #4    A 100 ohm resistor should used
-    pin 6:  LED strip #5    between each Teensy pin and the
-    pin 20: LED strip #6    wire to the LED strip, to minimize
-    pin 21: LED strip #7    high frequency ringining & noise.
-    pin 5:  LED strip #8
-    pin 15 & 16 - Connect together, but do not use
-    pin 4 - Do not use
-    pin 3 - Do not use as PWM.  Normal use is ok.
-  This test is useful for checking if your LED strips work, and which
-  color config (WS2811_RGB, WS2811_GRB, etc) they require.
+/*
+// Based on Adafruit Neopixel example https://github.com/adafruit/Adafruit_NeoPixel 
+
+// Parameter 1 = number of pixels in strip
+// Parameter 2 = pin number (most are valid)
+// Parameter 3 = pixel type flags, add together as needed:
+//   NEO_KHZ800  800 KHz bitstream (most NeoPixel products w/WS2812 LEDs)
+//   NEO_KHZ400  400 KHz (classic 'v1' (not v2) FLORA pixels, WS2811 drivers)
+//   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
+//   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
+
+/*
+State machine:
+Pulsing - random period & duration every 30 sec
+every 15 sec - random Start-End -> crawl there
 */
 
-#include <OctoWS2811.h>
 
-//number of LED per srip is 270 - 
-// 30 LED per moter, each arc is 3 meters, 3 arcs in total = 9 meters = 270 LEDs
-90 LED per arc - 
-const int ledsPerStrip = 270;
+#include <Adafruit_NeoPixel.h>
 
-DMAMEM int displayMemory[ledsPerStrip*6];
-int drawingMemory[ledsPerStrip*6];
-
-const int config = WS2811_GRB | WS2811_800kHz;
-
-OctoWS2811 leds(ledsPerStrip, displayMemory, drawingMemory, config);
-
-void setup() {
-  leds.begin();
-  leds.show();
-}
+//just for the beginning, later I'll might divide it to 3 pins so
+//we won't have data wires between the led strips
+#define PIN 23
+#define pirPin 15
 
 #define RED    0xFF0000
+#define BLCK   0x000000
 #define PUR    0xFF00FF
 #define GREEN  0x00FF00
 #define BLUE   0x0000FF
@@ -45,22 +33,145 @@ void setup() {
 #define ORANGE 0xE05800
 #define WHITE1 0xFFFFFF
 
-void loop() {
-  int microsec = 2000000 / leds.numPixels();  // change them all in 2 seconds
+//number of LED per srip is 180 - 
+// 30 LED per meter, each arc is 3 meters, 3 strips in total = 9 meters = 270 LEDs
+const int ledsPerStrip = 270;
 
-  // uncomment for voltage controlled speed
-  // millisec = analogRead(A9) / 40;
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(ledsPerStrip, PIN, NEO_GRB + NEO_KHZ800);
 
-  colorWipe(RED, microsec);
-  colorWipe(PUR, microsec);
-  colorWipe(GREEN, microsec);
-}
+//catterpilar dimensions
+int min_cat = 30;
+int max_cat = 100;
 
-void colorWipe(int color, int wait)
+int max_led;
+int min_led;
+
+int dest_max_led;
+int dest_min_led;
+
+int periodePulse = random(3000,6000);
+int displacePulse = random(1000,3000);     
+long time=0;
+
+uint32_t color_value;
+
+bool movementDetected = false;
+
+byte ambientR;
+byte ambientG;
+byte ambientB;
+
+unsigned long randomTimeDelaysec = 10000; // 10 sec
+unsigned long randomCountTime = 0;
+
+unsigned long pirTimeDelaysec = 100; // 10 sec
+unsigned long pirCountTime = 0;
+
+unsigned long movementTimeDelaysec = 10000; // 10 sec
+unsigned long movementCountTime = 0;
+
+unsigned long changeColor = 0;
+
+unsigned long periodeAmbientR = 0;
+unsigned long displaceAmbientR = 0; 
+unsigned long periodeAmbientG = 0;
+unsigned long displaceAmbientG = 0; 
+unsigned long periodeAmbientB = 0;
+unsigned long displaceAmbientB = 0; 
+
+void colorWipe(int startLED, int endLED, int colorR,int colorG,int colorB)
 {
-  for (int i=0; i < leds.numPixels(); i++) {
-    leds.setPixel(i, color);
-    leds.show();
-  }
-  delayMicroseconds(2000000); //2000ms between each cycle loop
+  //kill all the leds
+  for (int i=0; i < ledsPerStrip; i++)
+    strip.setPixelColor(i, BLCK);
+  //light just one one we need
+  for (int i=startLED; i <= endLED; i++)
+    strip.setPixelColor(i, colorR,colorG,colorB);
 }
+
+void randomPeriodDisplace()
+{
+  periodeAmbientR = random(3000,6000);
+  displaceAmbientR = random(1000,3000);
+  periodeAmbientG = random(3000,6000);
+  displaceAmbientG = random(1000,3000);
+  periodeAmbientB = random(3000,6000);
+  displaceAmbientB = random(1000,3000);
+}
+
+void setup() 
+{
+  //create a "real" random numbers
+  randomSeed(analogRead(0));
+
+  Serial.begin(9600);
+  pinMode(pirPin, INPUT);
+  
+  digitalWrite(pirPin, LOW);
+
+  //first run on random
+  randomPeriodDisplace();
+  
+  //starting the program - kill all the lights - make them dark (0,0,0)
+  colorWipe(0,ledsPerStrip-1, 0, 0, 0);
+  
+  strip.begin();
+  strip.show(); // Initialize all pixels to 'off'
+  
+  
+}
+
+void loop() 
+{
+
+  if ((abs(millis() - randomCountTime) > randomTimeDelaysec))
+  {
+    randomPeriodDisplace();
+    randomCountTime = millis();
+    randomTimeDelaysec = random(6000,20000);
+  }
+
+  //if during the last pirTimeDelaysec movement detected shine bright, if not just check
+  if ((abs(millis() - pirCountTime) > pirTimeDelaysec) and movementDetected == false)
+  {
+    if (digitalRead(pirPin) == LOW)
+    {
+      movementDetected = true;
+    }
+    
+    randomCountTime = millis();
+  }
+
+  //10 seconds after movement check set the checking var to false in order to be able to check again
+  if ((abs(millis() - movementCountTime) > movementTimeDelaysec) and movementDetected == true)
+  {
+    movementDetected = false;
+    movementCountTime = millis();
+  }
+
+  //smart cos fade of the leds
+  time=millis();
+  
+  //when movement is detected raise the brightness
+  if (movementDetected)
+    color_value = 128+127*cos(2*PI/periodePulse*(displacePulse-time))/2;
+  else
+    color_value = 128+127*cos(2*PI/periodePulse*(displacePulse-time));
+
+  //constant ambeint random light
+  ambientR = (128+127*cos(2*PI/periodeAmbientR*(displaceAmbientR-time)))/divider;
+  ambientG = (128+127*cos(2*PI/periodeAmbientG*(displaceAmbientG-time)))/divider;
+  ambientB = (128+127*cos(2*PI/periodeAmbientB*(displaceAmbientB-time)))/divider;
+
+  //write the colors
+  colorWipe(0,ledsPerStrip-1,ambientR,ambientG,ambientB);    
+
+  //brightness
+  strip.setBrightness(color_value);
+  strip.show();
+
+  
+
+}
+
+
